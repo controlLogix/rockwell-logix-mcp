@@ -5,3 +5,4 @@ __pycache__/
 # generated / project artifacts
 *.ACD
 *.L5X
+.pytest_cache/
