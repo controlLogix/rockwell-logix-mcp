@@ -59,7 +59,10 @@ ULINT, REAL, LREAL (integers use `Radix="Decimal"`, REAL/LREAL use `Radix="Float
 ## Structured Text & AOIs (ST-first)
 `l5xgen` emits ST routines and Add-On Instructions (`st_routine_l5x`, `aoi_l5x`, `inject(aois=[...])`).
 Full rules + Rockwell-manual citations: **`references/rockwell-st-codegen.md`** (read it before writing
-ST/AOIs). The rules that bite, all compile-verified:
+ST/AOIs). For the end-to-end method — turning a Sequence of Operations into a deployed,
+telemetry-publishing program (point list → UDT → control AOI → JSON/MQTT → validate → deploy →
+verify) — see **`references/rockwell-product-from-soo.md`** and the worked `examples/build_chiller.py`.
+The rules that bite, all compile-verified:
 - **Strings:** literals (`'x'`, single-quote, `$`-escapes, `"` is literal) are valid only in `:=`
   assignments — **not** as `CONCAT`/`INSERT` operands. Stage them: `lit := '.'; CONCAT(a, lit, dst);`.
   No native `RTOS`; build REAL→STRING via `TRUNC`/`MOD`/`DTOS` (see `AOI_RealToStr`). Built-in `STRING`
