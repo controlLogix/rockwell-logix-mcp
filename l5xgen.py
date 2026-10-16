@@ -29,9 +29,14 @@ def _default_value(dt: str) -> str:
 
 # --- element builders ---------------------------------------------------------------
 def tag_l5x(name, data_type, value=None, description=None,
-            external_access="Read/Write", constant=False) -> str:
+            external_access="Read/Write", constant=False, message=None) -> str:
     """One controller- or program-scope tag. Atomic types get an initial value; structured/UDT
-    tags are declared and left to Logix to initialize."""
+    tags are declared and left to Logix to initialize. Pass message={...} for a MESSAGE tag
+    (MSG config) - MESSAGE tags must be program/controller scope (never AOI locals)."""
+    if message is not None:
+        d = f"<Description><![CDATA[{description}]]></Description>\n" if description else ""
+        return (f'<Tag Name="{name}" TagType="Base" DataType="MESSAGE">\n{d}'
+                f'<Data Format="Message">{message_params_l5x(**message)}</Data>\n</Tag>')
     dt = data_type.upper()
     desc = f"<Description><![CDATA[{description}]]></Description>\n" if description else ""
     if dt in ATOMIC:
@@ -79,9 +84,98 @@ def program_l5x(name, main_routine, routines=None, scoped_tags=None) -> str:
     tags_xml = ""
     if scoped_tags:
         tags_xml = "<Tags>\n" + "\n".join(tag_l5x(**t) for t in scoped_tags) + "\n</Tags>\n"
-    routines_xml = "<Routines>\n" + "\n".join(routine_l5x(**r) for r in routines) + "\n</Routines>"
+    routines_xml = "<Routines>\n" + "\n".join(_render_routine(r) for r in routines) + "\n</Routines>"
     return (f'<Program Name="{name}" TestEdits="false" MainRoutineName="{main_routine}" '
             f'Disabled="false" Class="Standard" UseAsFolder="false">\n{tags_xml}{routines_xml}\n</Program>')
+
+
+# --- Structured Text + Add-On Instructions ------------------------------------------
+def st_routine_l5x(name: str, lines=None, routine_type: str = "ST") -> str:
+    """A Structured Text routine. lines is a list of ST source lines (one <Line> each)."""
+    lines = lines or []
+    body = "\n".join(f'<Line Number="{i}"><![CDATA[{ln}]]></Line>' for i, ln in enumerate(lines))
+    return f'<Routine Name="{name}" Type="{routine_type}">\n<STContent>\n{body}\n</STContent>\n</Routine>'
+
+
+def _render_routine(r: dict) -> str:
+    """Render a routine dict as RLL (rungs) or ST (lines)."""
+    if str(r.get("type", "RLL")).upper() == "ST":
+        return st_routine_l5x(r["name"], r.get("lines", []))
+    return routine_l5x(r["name"], r.get("rungs", []), r.get("type", "RLL"))
+
+
+def _radix_attr(dt: str) -> str:
+    u = dt.upper()
+    if u in _FLOAT:
+        return ' Radix="Float"'
+    if u in ATOMIC:
+        return ' Radix="Decimal"'
+    return ""  # UDT / AOI type carries no Radix
+
+
+def _decorated_default(dt: str, value=None) -> str:
+    u = dt.upper()
+    if u not in ATOMIC:
+        return ""
+    v = _default_value(u) if value is None else str(value)
+    return (f'<DefaultData Format="Decorated"><DataValue DataType="{u}" '
+            f'Radix="{_radix(u)}" Value="{v}"/></DefaultData>')
+
+
+def aoi_param_l5x(name, data_type, usage="Input", required=False, visible=True,
+                  dimension=0, description=None, default=None) -> str:
+    dim = f' Dimensions="{dimension}"' if dimension else ""
+    desc = f'<Description><![CDATA[{description}]]></Description>' if description else ""
+    inner = desc + ("" if usage == "InOut" else _decorated_default(data_type, default))
+    return (f'<Parameter Name="{name}" DataType="{data_type}" Usage="{usage}"'
+            f'{_radix_attr(data_type)}{dim} Required="{"true" if required else "false"}" '
+            f'Visible="{"true" if visible else "false"}">{inner}</Parameter>')
+
+
+def message_params_l5x(service_code, obj_class="16#0342", instance="0", req_len="0",
+                       local_element="", destination_tag="", connected_flag="1",
+                       comm_type="0", conn_path="1, 0", attribute="16#0000") -> str:
+    """A CIP Generic <MessageParameters> element (for a MESSAGE tag). Defaults target the socket
+    object (class 0x342) via "Message to Self": ConnectionPath "1, 0" (the CompactLogix slot-0
+    backplane path to the controller's own Ethernet, per ENET-AT002). ConnectedFlag "1" =
+    unconnected (required for front-Ethernet-port sockets); the L5X importer REJECTS "0", and
+    "2"/"3" are the connected variants. local_element = source tag; destination_tag = response
+    tag."""
+    le = f' LocalElement="{local_element}"' if local_element else ""
+    dt = f' DestinationTag="{destination_tag}"' if destination_tag else ""
+    return (f'<MessageParameters MessageType="CIP Generic" RequestedLength="{req_len}" '
+            f'ConnectedFlag="{connected_flag}" ConnectionPath="{conn_path}" CommTypeCode="{comm_type}" '
+            f'ServiceCode="{service_code}" ObjectType="{obj_class}" TargetObject="{instance}" '
+            f'AttributeNumber="{attribute}" LocalIndex="0"{le}{dt}/>')
+
+
+def aoi_localtag_l5x(name, data_type, dimension=0, description=None, default=None, message=None) -> str:
+    dim = f' Dimensions="{dimension}"' if dimension else ""
+    desc = f'<Description><![CDATA[{description}]]></Description>' if description else ""
+    if message is not None:  # a MESSAGE-typed local tag with CIP config
+        return (f'<LocalTag Name="{name}" DataType="MESSAGE">{desc}'
+                f'<Data Format="Message">{message_params_l5x(**message)}</Data></LocalTag>')
+    return (f'<LocalTag Name="{name}" DataType="{data_type}"{_radix_attr(data_type)}{dim}>'
+            f'{desc}{_decorated_default(data_type, default)}</LocalTag>')
+
+
+def aoi_l5x(name, parameters=None, local_tags=None, st_lines=None, revision="1.0",
+            description=None) -> str:
+    """An Add-On Instruction with an ST 'Logic' routine. EnableIn/EnableOut are added automatically.
+    parameters/local_tags are kwargs for aoi_param_l5x / aoi_localtag_l5x; st_lines is the Logic ST.
+    Put an InOut UDT parameter (e.g. the equipment data struct) for the AOI to read/write in place."""
+    params = [aoi_param_l5x("EnableIn", "BOOL", "Input", visible=False),
+              aoi_param_l5x("EnableOut", "BOOL", "Output", visible=False)]
+    params += [aoi_param_l5x(**p) for p in (parameters or [])]
+    lt = [aoi_localtag_l5x(**t) for t in (local_tags or [])]
+    lt_block = ("<LocalTags>\n" + "\n".join(lt) + "\n</LocalTags>\n") if lt else ""
+    desc = f'<Description><![CDATA[{description}]]></Description>\n' if description else ""
+    logic = st_routine_l5x("Logic", st_lines or [])
+    return (f'<AddOnInstructionDefinition Name="{name}" Revision="{revision}" '
+            f'ExecutePrescan="false" ExecutePostscan="false" ExecuteEnableInFalse="false" '
+            f'SoftwareRevision="v38.00">\n{desc}'
+            f'<Parameters>\n' + "\n".join(params) + "\n</Parameters>\n"
+            f'{lt_block}<Routines>\n{logic}\n</Routines>\n</AddOnInstructionDefinition>')
 
 
 # --- splicing -----------------------------------------------------------------------
@@ -124,15 +218,23 @@ def _schedule(xml: str, task: str, programs: list[str]) -> str:
     return _inject_before_close(xml, "Tasks", new_task)
 
 
-def inject(base_l5x: str, tags=None, udts=None, programs=None, schedule=None, task="MainTask") -> str:
+def inject(base_l5x: str, tags=None, udts=None, aois=None, programs=None, schedule=None, task="MainTask") -> str:
     """Splice generated elements into a cloned bare-project L5X and return the full project L5X.
 
     tags/udts: lists of kwargs for tag_l5x/datatype_l5x (controller scope).
-    programs: list of kwargs for program_l5x. schedule: list of program names to run under `task`.
+    aois: list of kwargs for aoi_l5x. programs: kwargs for program_l5x. schedule: program names to run.
     """
     xml = base_l5x
     if udts:
         xml = _inject_before_close(xml, "DataTypes", "\n".join(datatype_l5x(**u) for u in udts))
+    if aois:
+        block = "\n".join(aoi_l5x(**a) for a in aois)
+        if "<AddOnInstructionDefinitions" in xml:
+            xml = _inject_before_close(xml, "AddOnInstructionDefinitions", block)
+        else:
+            # bare base has no AOI container; it belongs after Modules, before controller Tags
+            head, sep, tail = xml.partition("<Tags")
+            xml = head + "<AddOnInstructionDefinitions>\n" + block + "\n</AddOnInstructionDefinitions>\n" + sep + tail
     if tags:
         # controller-scope Tags live before <Tasks ; operate on that region only
         head, sep, tail = xml.partition("<Tasks")
