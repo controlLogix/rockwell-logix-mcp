@@ -56,6 +56,23 @@ ULINT, REAL, LREAL (integers use `Radix="Decimal"`, REAL/LREAL use `Radix="Float
 - **Program**: `<Program Name=".." MainRoutineName="MainRoutine" Class="Standard" …><Routines><Routine Name="MainRoutine" Type="RLL"><RLLContent><Rung Number="0" Type="N"><Text><![CDATA[XIC(a)OTE(b);]]></Text></Rung></RLLContent></Routine></Routines></Program>`
 - **Schedule** a program so it runs: add `<ScheduledProgram Name=".."/>` inside the task's `<ScheduledPrograms>`.
 
+## Structured Text & AOIs (ST-first)
+`l5xgen` emits ST routines and Add-On Instructions (`st_routine_l5x`, `aoi_l5x`, `inject(aois=[...])`).
+Full rules + Rockwell-manual citations: **`references/rockwell-st-codegen.md`** (read it before writing
+ST/AOIs). The rules that bite, all compile-verified:
+- **Strings:** literals (`'x'`, single-quote, `$`-escapes, `"` is literal) are valid only in `:=`
+  assignments — **not** as `CONCAT`/`INSERT` operands. Stage them: `lit := '.'; CONCAT(a, lit, dst);`.
+  No native `RTOS`; build REAL→STRING via `TRUNC`/`MOD`/`DTOS` (see `AOI_RealToStr`). Built-in `STRING`
+  is 82 chars; define a `StringFamily` type for bigger buffers.
+- **BOOL** can't go in a numeric expression (`d := someBool;` fails) — branch to assign `1`/`0`.
+- **AOI params:** Input/Output must be ATOMIC; pass UDTs/strings/arrays as **InOut** (else import is
+  rejected). The main routine is `Logic`.
+- **AOI calls** are positional by definition name, backing tag first:
+  `AOIName(BackingTag, InOut/required operands);`. Set optional inputs as instance members first
+  (`Inst.X := v;`). No `param := value` named args; no extra operands.
+- Always gate on `validate_l5x(build=True)` — an L5X imports even when its ST won't compile.
+- Worked example: `../chiller/build_chiller.py` (UDT + ChillerSim + RealToStr + JsonBuild, all compile).
+
 ## Critical gotchas
 - **Bare project.** A fresh SDK project has no MainProgram/MainRoutine. Always scaffold (and
   **schedule**) a program, or the controller does nothing and some builds warn.
