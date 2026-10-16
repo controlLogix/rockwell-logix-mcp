@@ -1,0 +1,9 @@
+mcp>=2,<3
+pycomm3
+pylogix
+asyncua
+pymodbus
+paho-mqtt
+# The Logix Designer SDK Python package (logix-designer-sdk, which pulls in pythonnet) is NOT
+# redistributed here. Install it from your Studio 5000 Logix Designer SDK installation, e.g.:
+#   pip install "C:\Users\Public\Documents\Studio 5000\Logix Designer SDK\python\logix_designer_sdk-2.0.2-py3-none-any.whl"
